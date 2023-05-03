@@ -28,7 +28,7 @@ int subscribed(int fd, char *topic, struct tcp_client tcp_clients[MAX_CONNECTION
             vector<pair<char *, int>> subscriptions = tcp_clients[k].subscriptions;
             for (int j = 0; j < subscriptions.size(); j++)
                 if (!strcmp(subscriptions[j].first, topic))
-                    return 1;
+                    return 1 + subscriptions[j].second;
 
             break;
         }
@@ -94,13 +94,13 @@ void run(int listen_tcp, int listen_udp)
     poll_fds[2].events = POLLIN;
 
     while (1)
-    {   
+    {
         // printf("fac poll...\n");
         rc = poll(poll_fds, num_clients, -1);
         DIE(rc < 0, "poll");
 
         for (int i = 0; i < num_clients; i++)
-        {  
+        {
             // printf("fd cu indice=%d\n", i);
             if (poll_fds[i].revents & POLLIN)
             {
@@ -120,26 +120,60 @@ void run(int listen_tcp, int listen_udp)
                     rc = recv(newsockfd, &id, sizeof(id), 0);
                     DIE(rc < 0, "recv");
 
-                    //check for duplicate id...
-                    int duplicate = 0;
+                    int status = 0; // never connected before
+                    int tcp_pos = -1;
                     for (int k = 0; k < num_tcp_clients; k++)
                         if (!strcmp(tcp_clients[k].id, id))
-                            duplicate = 1;
+                        {
+                            tcp_pos = k;
+                            status = 1; // not connected now, trying to reconnect
+                            if (tcp_clients[k].connected == 1)
+                                status = 2; // trying to connect twince with same id, illegal
+                            break;
+                        }
 
-                    if (!duplicate)
+                    if (status < 2)
                     {
                         poll_fds[num_clients].fd = newsockfd;
                         poll_fds[num_clients].events = POLLIN;
                         num_clients++;
 
-                        tcp_clients[num_tcp_clients].fd = newsockfd;
-                        strcpy(tcp_clients[num_tcp_clients].id, id);
-                        num_tcp_clients++;
                         printf("New client %s connected from %s:%d.\n",
                                id, inet_ntoa(cli_addr.sin_addr), ntohs(cli_addr.sin_port));
+
+                        if (status == 0)
+                        {
+                            tcp_clients[num_tcp_clients].fd = newsockfd;
+                            tcp_clients[num_tcp_clients].connected = 1;
+                            strcpy(tcp_clients[num_tcp_clients].id, id);
+                            num_tcp_clients++;
+                        }
+                        else
+                        {
+                            tcp_clients[tcp_pos].connected = 1;
+                            tcp_clients[tcp_pos].fd = newsockfd;
+
+                            FILE *f = fopen(id, "r");
+                            if (f)
+                            {
+                                char *buf;
+                                size_t len = 0;
+                                ssize_t read;
+
+                                while ((read = getline(&buf, &len, f)) != -1)
+                                {
+                                    // printf("the line has len=%ld and is %s\n", strlen(buf), buf);
+                                    rc = send_all(newsockfd, buf, 1800);
+                                    DIE(rc < 0, "send");
+                                }
+
+                                remove(id);
+                                fclose(f);
+                            }
+                        }
                     }
                     else
-                    {   
+                    {
                         printf("Client %s already connected.\n", id);
 
                         char buf[1800];
@@ -171,16 +205,25 @@ void run(int listen_tcp, int listen_udp)
                     received_packet = create_recv_packet(buf);
 
                     // now send to subscribed tcp clients....
-                    for (int k = 3; k < num_clients; k++)
+                    for (int k = 0; k < num_tcp_clients; k++)
                     {
-                        if (subscribed(poll_fds[k].fd, received_packet.topic, tcp_clients, num_tcp_clients))
+                        int sub = subscribed(tcp_clients[k].fd, received_packet.topic, tcp_clients, num_tcp_clients); // 0 unsub, 1 sub nosf, 2 sub sf
+                        if (sub > 0)
                         {
                             memset(buf, 0, 1800);
-                            sprintf(buf, "%s:%d - %s - %s - %s", inet_ntoa(client_addr.sin_addr), (ntohs(client_addr.sin_port)),
+                            sprintf(buf, "%s:%d - %s - %s - %s\n", inet_ntoa(client_addr.sin_addr), (ntohs(client_addr.sin_port)),
                                     received_packet.topic, data_type_string[received_packet.data_type], received_packet.payload);
-
-                            rc = send_all(poll_fds[k].fd, &buf, 1800);
-                            DIE(rc < 0, "send");
+                            if (tcp_clients[k].connected == 1)
+                            {
+                                rc = send_all(tcp_clients[k].fd, &buf, 1800);
+                                DIE(rc < 0, "send");
+                            }
+                            else if (sub == 2) //sf activated
+                            {
+                                FILE *f = fopen(tcp_clients[k].id, "a");
+                                fprintf(f, "%s", buf);
+                                fclose(f);
+                            }
                         }
                     }
 
@@ -198,10 +241,13 @@ void run(int listen_tcp, int listen_udp)
                         for (int k = 0; k < num_tcp_clients; k++)
                         {
                             // daca clientul e conectat atunci inchidem conexiunea si trimitem mesaj sa se inchida si el
-                            rc = send_all(tcp_clients[k].fd, &buf, sizeof(buf));
-                            DIE(rc < 0, "send");
-                            // inchidem si socketii de comunicare cu clientii
-                            close(tcp_clients[k].fd);
+                            if (tcp_clients[k].connected)
+                            {
+                                rc = send_all(tcp_clients[k].fd, &buf, sizeof(buf));
+                                DIE(rc < 0, "send");
+                                // inchidem si socketii de comunicare cu clientii
+                                close(tcp_clients[k].fd);
+                            }
                         }
 
                         // oprim server
@@ -239,13 +285,10 @@ void run(int listen_tcp, int listen_udp)
                         // se scoate din multimea de citire socketul inchis
                         for (int j = i; j < num_clients - 1; j++)
                             poll_fds[j] = poll_fds[j + 1];
-                        
-
-                        for (int j = client_num; j < num_tcp_clients - 1; j++)
-                            tcp_clients[j] = tcp_clients[j + 1];
-
                         num_clients--;
-                        num_tcp_clients--;
+
+                        tcp_clients[client_num].connected = 0;
+                        tcp_clients[client_num].fd = -1;
                     }
                     else
                     {
@@ -266,9 +309,9 @@ void run(int listen_tcp, int listen_udp)
                             }
 
                             memset(buf, 0, 1800);
-                            sprintf(buf, "Subscribed to topic.");
+                            sprintf(buf, "Subscribed to topic.\n");
 
-                            rc = send_all(poll_fds[i].fd, &buf, 1800);
+                            rc = send_all(poll_fds[i].fd, &buf, sizeof(buf));
                             DIE(rc < 0, "send");
                         }
                         else if (!strcmp(sub, "unsubscribe"))
@@ -290,9 +333,9 @@ void run(int listen_tcp, int listen_udp)
                             }
 
                             memset(buf, 0, 1800);
-                            sprintf(buf, "Unsubscribed from topic.");
+                            sprintf(buf, "Unsubscribed from topic.\n");
 
-                            rc = send_all(poll_fds[i].fd, &buf, 1800);
+                            rc = send_all(poll_fds[i].fd, &buf, sizeof(buf));
                             DIE(rc < 0, "send");
                         }
                     }

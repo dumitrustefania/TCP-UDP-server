@@ -25,6 +25,7 @@ struct tcp_client {
   char id[11];
   int fd;
   vector<pair<char*, int>> subscriptions;
+  int connected;
 };
 
 #endif

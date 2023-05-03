@@ -12,6 +12,7 @@ int recv_all(int sockfd, void *buffer, size_t len)
     size_t bytes_received = 0;
     size_t bytes_remaining = len;
     void *buff = buffer;
+    // printf("str recv= %s\n", buffer);
 
     while (bytes_remaining)
     {
@@ -36,7 +37,7 @@ int send_all(int sockfd, void *buffer, size_t len)
     size_t bytes_sent = 0;
     size_t bytes_remaining = len;
     void *buff = buffer;   
-    
+    // printf("str sent= %s\n", buffer);
     while (bytes_remaining)
     {
         int bytes = send(sockfd, buff, bytes_remaining, 0);

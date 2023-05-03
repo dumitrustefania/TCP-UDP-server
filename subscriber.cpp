@@ -60,7 +60,7 @@ void run_client(int sockfd)
                        return;
                     
 
-                    printf("%s\n", buf);
+                    printf("%s", buf);
                 }
             }
         }
