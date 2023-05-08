@@ -44,7 +44,7 @@ void run_client(int sockfd)
                     if (!strncmp(buf, "exit", 4))
                         return;
                     
-                    // subscribe/unsubscribe/exit
+                    // subscribe/unsubscribe
                     // Use send_all function to send the pachet to the server.
                     send_all(sockfd, &buf, 1800);
                 }

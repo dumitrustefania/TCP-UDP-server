@@ -19,7 +19,7 @@
 
 char const *data_type_string[4] = {"INT", "SHORT_REAL", "FLOAT", "STRING"};
 
-int subscribed(int fd, char *topic, struct tcp_client tcp_clients[MAX_CONNECTIONS], int num_tcp_clients)
+int check_subscribed(int fd, char *topic, struct tcp_client tcp_clients[MAX_CONNECTIONS], int num_tcp_clients)
 {
     for (int k = 0; k < num_tcp_clients; k++)
     {
@@ -67,9 +67,14 @@ struct udp_packet create_recv_packet(char *buf)
     {
         strcpy(received_packet.payload, buf + 51);
     }
+    else
+    {
+        fprintf(stderr, "Unrecognized data type");
+    }
 
     return received_packet;
 }
+
 void run(int listen_tcp, int listen_udp)
 {
     struct pollfd poll_fds[MAX_CONNECTIONS];
@@ -95,13 +100,11 @@ void run(int listen_tcp, int listen_udp)
 
     while (1)
     {
-        // printf("fac poll...\n");
         rc = poll(poll_fds, num_clients, -1);
         DIE(rc < 0, "poll");
 
         for (int i = 0; i < num_clients; i++)
         {
-            // printf("fd cu indice=%d\n", i);
             if (poll_fds[i].revents & POLLIN)
             {
                 if (poll_fds[i].fd == listen_tcp)
@@ -116,7 +119,6 @@ void run(int listen_tcp, int listen_udp)
                     // de citire
 
                     char id[11];
-                    // rc = recv_all(newsockfd, &id, sizeof(id));
                     rc = recv(newsockfd, &id, sizeof(id), 0);
                     DIE(rc < 0, "recv");
 
@@ -148,13 +150,13 @@ void run(int listen_tcp, int listen_udp)
                             strcpy(tcp_clients[num_tcp_clients].id, id);
                             num_tcp_clients++;
                         }
-                        else
+                        else // status == 1
                         {
                             tcp_clients[tcp_pos].connected = 1;
                             tcp_clients[tcp_pos].fd = newsockfd;
 
                             FILE *f = fopen(id, "r");
-                            if (f)
+                            if (f != NULL)
                             {
                                 char *buf;
                                 size_t len = 0;
@@ -162,7 +164,6 @@ void run(int listen_tcp, int listen_udp)
 
                                 while ((read = getline(&buf, &len, f)) != -1)
                                 {
-                                    // printf("the line has len=%ld and is %s\n", strlen(buf), buf);
                                     rc = send_all(newsockfd, buf, 1800);
                                     DIE(rc < 0, "send");
                                 }
@@ -172,7 +173,7 @@ void run(int listen_tcp, int listen_udp)
                             }
                         }
                     }
-                    else
+                    else // status == 2
                     {
                         printf("Client %s already connected.\n", id);
 
@@ -190,8 +191,6 @@ void run(int listen_tcp, int listen_udp)
                 }
                 else if (poll_fds[i].fd == listen_udp)
                 {
-                    /* Receive a datagram and send an ACK */
-                    /* The info of the who sent the datagram (PORT and IP) */
                     struct udp_packet received_packet;
                     struct sockaddr_in client_addr;
                     socklen_t clen = sizeof(client_addr);
@@ -207,7 +206,7 @@ void run(int listen_tcp, int listen_udp)
                     // now send to subscribed tcp clients....
                     for (int k = 0; k < num_tcp_clients; k++)
                     {
-                        int sub = subscribed(tcp_clients[k].fd, received_packet.topic, tcp_clients, num_tcp_clients); // 0 unsub, 1 sub nosf, 2 sub sf
+                        int sub = check_subscribed(tcp_clients[k].fd, received_packet.topic, tcp_clients, num_tcp_clients); // 0 unsub, 1 sub nosf, 2 sub sf
                         if (sub > 0)
                         {
                             memset(buf, 0, 1800);
@@ -348,12 +347,13 @@ void run(int listen_tcp, int listen_udp)
 }
 
 int main(int argc, char *argv[])
-{
+{ // Dezactivam buffering-ul la afisare
     setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
+    // Verificam argumentele primite de executabil
     if (argc != 2)
     {
-        printf("\n Usage: %s <port>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <port>\n", argv[0]);
         return 1;
     }
 
@@ -390,13 +390,14 @@ int main(int argc, char *argv[])
     rc = inet_pton(AF_INET, SERVER_LOCALHOST_IP, &serv_addr.sin_addr.s_addr);
     DIE(rc <= 0, "inet_pton");
 
-    // Asociem adresa serverului cu socketul creat folosind bind
+    // Asociem adresa serverului cu socketii creati folosind bind
     rc = bind(listen_tcp, (const struct sockaddr *)&serv_addr, sizeof(serv_addr));
     DIE(rc < 0, "bind tcp");
 
     rc = bind(listen_udp, (const struct sockaddr *)&serv_addr, sizeof(serv_addr));
     DIE(rc < 0, "bind udp");
 
+    // Rulam programul
     run(listen_tcp, listen_udp);
 
     // Inchidem listenfd
