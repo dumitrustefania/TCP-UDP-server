@@ -6,19 +6,17 @@ PORT = 12345
 # Adresa IP a serverului
 IP_SERVER = 127.0.0.1
 
-ID = "100"
-
 all: server subscriber
 
 common.o: common.cpp
 
-# Compileaza server.c
+# Compileaza server.cpp
 server: server.cpp common.o
 
-# Compileaza subscriber.c
+# Compileaza subscriber.cpp
 subscriber: subscriber.cpp common.o
 
 .PHONY: clean run_server run_client
 
 clean:
-	rm -rf server subscriber *.o *.dSYM
+	rm -rf server subscriber *.o
